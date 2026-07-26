@@ -68,7 +68,7 @@ impl WindowTracker {
 
     /// Whether a working active-window source exists for this environment.
     pub fn is_available(&self) -> bool {
-        matches!(self.de, "kde" | "hyprland") || std::env::var_os("DISPLAY").is_some()
+        matches!(self.de, "kde" | "hyprland") || crate::actions::session_var("DISPLAY").is_some()
     }
 
     /// Run the tracker until `tx` is closed. Pushes each newly focused window's
@@ -80,7 +80,14 @@ impl WindowTracker {
     pub async fn watch(self, tx: UnboundedSender<String>) {
         match self.de {
             "kde" => {
-                if install_kwin_script(KWIN_ACTIVE_WINDOW_SCRIPT) {
+                // install_kwin_script blocks on two dbus-send calls; keep them
+                // off the async worker this future runs on.
+                let installed = tokio::task::spawn_blocking(|| {
+                    install_kwin_script(KWIN_ACTIVE_WINDOW_SCRIPT)
+                })
+                .await
+                .unwrap_or(false);
+                if installed {
                     tracing::info!("KWin active-window script installed (per-app hardware profiles)");
                 } else {
                     tracing::warn!(
@@ -169,7 +176,10 @@ fn install_kwin_script(script: &str) -> bool {
 
 /// Path to the Hyprland `.socket2` event socket for this session.
 fn hyprland_socket2_path() -> Option<PathBuf> {
-    let sig = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
+    // session_var, like detect_desktop: the branch that lands here is picked
+    // from the session environment, so the signature has to come from the same
+    // place or the Hyprland arm resolves to nothing and tracking stops dead.
+    let sig = crate::actions::session_var("HYPRLAND_INSTANCE_SIGNATURE")?;
     let runtime = std::env::var("XDG_RUNTIME_DIR").ok()?;
     Some(PathBuf::from(runtime).join("hypr").join(sig).join(".socket2.sock"))
 }

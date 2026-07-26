@@ -9,8 +9,10 @@
 //! Executes commands via sh -c for shell interpretation, non-blocking.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::process::Command;
-use std::time::Instant;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Action types supported by radial menu
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +71,12 @@ pub struct Action {
     pub icon: Option<String>,
 }
 
+/// Bound every `dbus-send` wait. These calls are awaited on the single gesture
+/// dispatch task, so dbus-send's 25 second default would freeze the button, the
+/// thumb wheel and macro triggers together whenever the compositor or the shell
+/// is wedged.
+const REPLY_TIMEOUT: &str = "--reply-timeout=2000";
+
 /// Action executor
 pub struct ActionExecutor;
 
@@ -105,8 +113,12 @@ impl ActionExecutor {
 
         tracing::info!(keys, "Executing keyboard shortcut");
 
-        let is_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
-            || std::env::var("XDG_SESSION_TYPE")
+        // session_var, not std::env: started from the systemd user unit the
+        // daemon has neither variable, so this read said "X11" on a Wayland
+        // session, skipped the uinput path below, and every shortcut action
+        // died in xdotool with an empty DISPLAY (issue #60).
+        let is_wayland = session_var("WAYLAND_DISPLAY").is_some()
+            || session_var("XDG_SESSION_TYPE")
                 .map(|s| s.eq_ignore_ascii_case("wayland"))
                 .unwrap_or(false);
 
@@ -117,7 +129,7 @@ impl ActionExecutor {
         let mut injected = false;
         if is_wayland {
             if let Some(codes) = Self::shortcut_to_evdev_codes(keys) {
-                injected = Self::inject_via_ydotool(&codes);
+                injected = Self::inject_via_ydotool(keys, &codes);
                 if !injected {
                     tracing::warn!(keys, "ydotool injection failed; trying xdotool");
                 }
@@ -129,18 +141,15 @@ impl ActionExecutor {
         // X11 (or Wayland fallback): keysyms are case-sensitive (e.g.
         // XF86AudioRaiseVolume), so pass the ORIGINAL case to xdotool.
         if !injected {
-            match Command::new("xdotool").args(["key", keys]).spawn() {
-                Ok(mut child) => match child.try_wait() {
-                    Ok(Some(status)) if !status.success() => {
-                        tracing::warn!("xdotool exited with error status");
-                    }
-                    Err(e) => tracing::warn!("Error checking xdotool status: {}", e),
-                    _ => {}
-                },
+            let mut cmd = Command::new("xdotool");
+            cmd.args(["key", keys]);
+            apply_session_env(&mut cmd);
+            match cmd.spawn() {
+                Ok(child) => reap_in_background(child, keys, "xdotool"),
                 Err(e) => {
                     tracing::debug!("xdotool unavailable: {}, trying ydotool codes", e);
                     let ok = Self::shortcut_to_evdev_codes(keys)
-                        .map(|c| Self::inject_via_ydotool(&c))
+                        .map(|c| Self::inject_via_ydotool(keys, &c))
                         .unwrap_or(false);
                     if !ok {
                         return Err(ActionError::ExecutionFailed(format!(
@@ -216,12 +225,15 @@ impl ActionExecutor {
     /// Inject a key chord through the kernel uinput device via ydotool: press
     /// every code in order, then release in reverse. ydotool uses uinput, so it
     /// drives both X11 and Wayland (incl. KDE Plasma). Returns true if started.
-    fn inject_via_ydotool(codes: &[u16]) -> bool {
+    fn inject_via_ydotool(keys: &str, codes: &[u16]) -> bool {
         let mut args: Vec<String> = vec!["key".to_string()];
         args.extend(codes.iter().map(|c| format!("{}:1", c)));
         args.extend(codes.iter().rev().map(|c| format!("{}:0", c)));
         match Command::new("ydotool").args(&args).spawn() {
-            Ok(mut child) => !matches!(child.try_wait(), Ok(Some(status)) if !status.success()),
+            Ok(child) => {
+                reap_in_background(child, keys, "ydotool");
+                true
+            }
             Err(_) => false,
         }
     }
@@ -238,11 +250,13 @@ impl ActionExecutor {
         tracing::info!(cmd, "Executing shell command");
 
         // Use sh -c for shell interpretation (handles pipes, redirects, etc.)
-        let result = Command::new("sh")
-            .args(["-c", cmd])
-            .spawn();
+        let mut command = Command::new("sh");
+        command.args(["-c", cmd]);
+        // Button presets launch GUIs (Calculator) and compositor clients
+        // (hyprctl), which need a display the unit environment does not carry.
+        apply_session_env(&mut command);
 
-        match result {
+        match command.spawn() {
             Ok(_child) => {
                 // Don't wait for command to complete (AC2: non-blocking)
                 tracing::debug!("Shell command spawned successfully");
@@ -286,6 +300,7 @@ impl ActionExecutor {
         let mut args = vec![
             "--session".to_string(),
             "--print-reply".to_string(),
+            REPLY_TIMEOUT.to_string(),
             format!("--dest={}", call.service),
             call.path.clone(),
             format!("{}.{}", call.interface, call.method),
@@ -336,6 +351,7 @@ impl ActionExecutor {
             .args([
                 "--session",
                 "--print-reply",
+                REPLY_TIMEOUT,
                 "--dest=org.kde.kglobalaccel",
                 "/component/kwin",
                 "org.kde.kglobalaccel.Component.invokeShortcut",
@@ -447,9 +463,154 @@ pub fn get_default_actions() -> [Action; 8] {
 
 use crate::config::ButtonAction;
 
+/// Reap a spawned key-synthesis helper off the press path and report a real
+/// failure.
+///
+/// `try_wait()` straight after `spawn()` reports "still running" for a process
+/// that is about to fail, so a broken helper was logged as a successful
+/// shortcut for the whole of issue #60: the daemon printed "Keyboard shortcut
+/// executed" while xdotool aborted with an empty DISPLAY. Waiting here would
+/// blow the 10ms budget (NFR-001), so wait on a blocking task instead.
+fn reap_in_background(mut child: std::process::Child, input: &str, tool: &'static str) {
+    let input = input.to_string();
+    tokio::task::spawn_blocking(move || match child.wait() {
+        Ok(status) if !status.success() => tracing::warn!(
+            input,
+            tool,
+            code = status.code().unwrap_or(-1),
+            "input synthesis failed - nothing was sent"
+        ),
+        Err(e) => tracing::warn!(input, tool, error = %e, "could not reap input synthesis helper"),
+        _ => {}
+    });
+}
+
+/// Session variables a spawned helper needs and the daemon does not inherit.
+const SESSION_VARS: [&str; 6] = [
+    "DISPLAY",
+    "XAUTHORITY",
+    "WAYLAND_DISPLAY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_SESSION_TYPE",
+    "HYPRLAND_INSTANCE_SIGNATURE",
+];
+
+/// Give a child the session environment the daemon was started without, so a
+/// helper that needs a display (xdotool, hyprctl, a GUI the user mapped to a
+/// button) can find one. Variables already in the daemon's environment are
+/// inherited as usual and re-set to the same value.
+///
+/// Reads the manager environment once for all six names: one lookup per name
+/// would fork `systemctl` six times on the press path.
+fn apply_session_env(cmd: &mut Command) {
+    with_session_env(|session| {
+        for name in SESSION_VARS {
+            let own = std::env::var(name).ok();
+            if let Some(value) = prefer_process_value(own, || session.get(name).cloned()) {
+                cmd.env(name, value);
+            }
+        }
+    });
+}
+
+/// Read a session variable, falling back to the systemd user manager.
+///
+/// systemd composes a unit's environment when the unit starts. Plasma and GNOME
+/// publish `XDG_CURRENT_DESKTOP`, `WAYLAND_DISPLAY`, `DISPLAY` and friends into
+/// that manager only once the session is up, which is after the daemon's unit
+/// has already started, and a process's environment cannot be rewritten
+/// afterwards, so the daemon's own stays empty for the whole session.
+/// `compositor.rs` works around the same trap for KWin detection (issue #32);
+/// this is the general form.
+pub fn session_var(name: &str) -> Option<String> {
+    prefer_process_value(std::env::var(name).ok(), || {
+        with_session_env(|session| session.get(name).cloned())
+    })
+}
+
+/// The process value wins when it is set and non-empty; otherwise the session
+/// one. Split out from [`session_var`] so the precedence is testable without
+/// touching the ambient environment.
+fn prefer_process_value(
+    process: Option<String>,
+    session: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    match process {
+        Some(value) if !value.is_empty() => Some(value),
+        _ => session(),
+    }
+}
+
+/// The systemd user manager's environment as seen by `systemctl --user
+/// show-environment`.
+///
+/// A session publishes its variables in stages, so an early read can be missing
+/// the display ones: caching that answer permanently would pin the daemon to a
+/// broken environment for the rest of its life, and re-reading on every miss
+/// costs a fork per lookup on the press path. Keep re-reading only while the
+/// display variables are still absent, and no more than once per
+/// [`SESSION_ENV_RETRY`].
+fn with_session_env<T>(f: impl FnOnce(&HashMap<String, String>) -> T) -> T {
+    static CACHE: OnceLock<Mutex<Option<SessionEnv>>> = OnceLock::new();
+
+    let cell = CACHE.get_or_init(|| Mutex::new(None));
+    let mut cached = match cell.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    let stale = match cached.as_ref() {
+        Some(env) => !env.settled && env.read_at.elapsed() >= SESSION_ENV_RETRY,
+        None => true,
+    };
+    if stale {
+        let vars = read_systemd_user_environment();
+        let settled = vars.contains_key("WAYLAND_DISPLAY") || vars.contains_key("DISPLAY");
+        *cached = Some(SessionEnv { vars, settled, read_at: Instant::now() });
+    }
+
+    match cached.as_ref() {
+        Some(env) => f(&env.vars),
+        None => f(&HashMap::new()),
+    }
+}
+
+/// How long to wait before re-reading a session environment that still has no
+/// display variables in it.
+const SESSION_ENV_RETRY: Duration = Duration::from_secs(2);
+
+struct SessionEnv {
+    vars: HashMap<String, String>,
+    /// The display variables have arrived, so this will not change again.
+    settled: bool,
+    read_at: Instant,
+}
+
+fn read_systemd_user_environment() -> HashMap<String, String> {
+    match Command::new("systemctl")
+        .args(["--user", "show-environment"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            parse_environment_block(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => HashMap::new(),
+    }
+}
+
+/// Split systemd's `NAME=value` listing into pairs. Values that need it are
+/// double-quoted, and the session variables read here never contain escapes.
+fn parse_environment_block(block: &str) -> HashMap<String, String> {
+    block
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, value)| (name.to_string(), value.trim_matches('"').to_string()))
+        .collect()
+}
+
 /// Detect current desktop environment
 pub fn detect_desktop() -> &'static str {
-    std::env::var("XDG_CURRENT_DESKTOP")
+    session_var("XDG_CURRENT_DESKTOP")
         .map(|d| {
             let u = d.to_uppercase();
             if u.contains("KDE") || u.contains("PLASMA") {
@@ -559,19 +720,27 @@ pub async fn execute_horizontal_scroll(clicks: i32) -> Result<(), ActionError> {
     let count = clicks.unsigned_abs().min(16);
 
     for _ in 0..count {
-        let spawned = Command::new("xdotool")
-            .args(["click", button])
-            .spawn();
-        if let Err(e) = spawned {
-            tracing::debug!("xdotool horizontal scroll failed: {}, trying ydotool", e);
-            // ydotool click button codes: 0x06 = left scroll, 0x07 = right scroll.
-            let yd_button = if clicks > 0 { "0x07" } else { "0x06" };
-            if let Err(e2) = Command::new("ydotool").args(["click", yd_button]).spawn() {
-                tracing::error!("Both xdotool and ydotool horizontal scroll failed: {}", e2);
-                return Err(ActionError::ExecutionFailed(format!(
-                    "Horizontal scroll failed: {}",
-                    e2
-                )));
+        let mut cmd = Command::new("xdotool");
+        cmd.args(["click", button]);
+        // Same hole as the shortcut path: without the session environment
+        // xdotool dies on an empty DISPLAY and the click is lost (issue #60).
+        apply_session_env(&mut cmd);
+        match cmd.spawn() {
+            Ok(child) => reap_in_background(child, button, "xdotool"),
+            Err(e) => {
+                tracing::debug!("xdotool horizontal scroll failed: {}, trying ydotool", e);
+                // ydotool click button codes: 0x06 = left scroll, 0x07 = right scroll.
+                let yd_button = if clicks > 0 { "0x07" } else { "0x06" };
+                match Command::new("ydotool").args(["click", yd_button]).spawn() {
+                    Ok(child) => reap_in_background(child, yd_button, "ydotool"),
+                    Err(e2) => {
+                        tracing::error!("Both xdotool and ydotool horizontal scroll failed: {}", e2);
+                        return Err(ActionError::ExecutionFailed(format!(
+                            "Horizontal scroll failed: {}",
+                            e2
+                        )));
+                    }
+                }
             }
         }
     }
@@ -590,6 +759,7 @@ async fn execute_virtual_desktops() -> Result<(), ActionError> {
                 .args([
                     "--session",
                     "--print-reply",
+                    REPLY_TIMEOUT,
                     "--dest=org.gnome.Shell",
                     "/org/gnome/Shell",
                     "org.freedesktop.DBus.Properties.Get",
@@ -612,6 +782,7 @@ async fn execute_virtual_desktops() -> Result<(), ActionError> {
                 .args([
                     "--session",
                     "--print-reply",
+                    REPLY_TIMEOUT,
                     "--dest=org.gnome.Shell",
                     "/org/gnome/Shell",
                     "org.freedesktop.DBus.Properties.Set",
@@ -633,6 +804,7 @@ async fn execute_virtual_desktops() -> Result<(), ActionError> {
                         .args([
                             "--session",
                             "--print-reply",
+                            REPLY_TIMEOUT,
                             "--dest=org.gnome.Shell",
                             "/org/gnome/Shell",
                             "org.gnome.Shell.Eval",
@@ -799,6 +971,50 @@ mod tests {
 
         let err = ActionError::ShellExecution("command not found".to_string());
         assert!(format!("{}", err).contains("Shell execution"));
+    }
+
+    #[test]
+    fn environment_block_splits_on_the_first_equals() {
+        let env = parse_environment_block(
+            "XDG_CURRENT_DESKTOP=KDE\n\
+             DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus\n\
+             XAUTHORITY=\"/run/user/1000/xauth_UeOZcX\"\n",
+        );
+
+        assert_eq!(env.get("XDG_CURRENT_DESKTOP").unwrap(), "KDE");
+        // A value may itself contain '=' - only the first one separates.
+        assert_eq!(
+            env.get("DBUS_SESSION_BUS_ADDRESS").unwrap(),
+            "unix:path=/run/user/1000/bus"
+        );
+        // systemd quotes values that need it; the quotes are not part of them.
+        assert_eq!(
+            env.get("XAUTHORITY").unwrap(),
+            "/run/user/1000/xauth_UeOZcX"
+        );
+    }
+
+    #[test]
+    fn a_process_value_wins_over_the_session_one() {
+        let picked = prefer_process_value(Some("wayland-0".to_string()), || {
+            panic!("must not consult the session when the process has a value")
+        });
+        assert_eq!(picked.as_deref(), Some("wayland-0"));
+    }
+
+    #[test]
+    fn an_unset_or_empty_process_value_falls_back_to_the_session() {
+        // Empty counts as unset: systemd exports DISPLAY= on some sessions,
+        // and xdotool treats that exactly like no display at all.
+        for own in [None, Some(String::new())] {
+            let picked = prefer_process_value(own, || Some(":0".to_string()));
+            assert_eq!(picked.as_deref(), Some(":0"));
+        }
+    }
+
+    #[test]
+    fn a_variable_neither_side_has_is_none() {
+        assert_eq!(prefer_process_value(None, || None), None);
     }
 
     #[tokio::test]
