@@ -78,6 +78,42 @@ def _refresh_monitors():
             _monitors_cache = []
 
 
+def _hypr_logical_size(mon):
+    """Logical (post-rotation, post-scale) size of a `hyprctl monitors -j` entry.
+
+    hyprctl reports width/height as the PRE-rotation mode size, while the
+    layout that `hyprctl cursorpos` lives in uses the transformed size:
+    Hyprland swaps x/y whenever `transform % 2 == 1` (90/270, including the
+    flipped variants 5 and 7). Without that swap a portrait monitor produced a
+    transposed rect, so the fraction mapping divided by the wrong side and threw
+    the menu to the bottom of the screen (issue #78). The KDE sibling
+    `_parse_kscreen_json` has always done this swap, which is why only Hyprland
+    was affected.
+
+    Returned unrounded: at a fractional scale the logical size is not an
+    integer, and testing containment against a truncated one drops the last
+    reachable pixel column into no monitor at all.
+    """
+    scale = mon.get("scale", 1.0) or 1.0
+    width = mon.get("width", 1920)
+    height = mon.get("height", 1080)
+    if (mon.get("transform", 0) or 0) % 2 == 1:
+        width, height = height, width
+    return width / scale, height / scale
+
+
+def hypr_logical_rect(mon):
+    """Logical-pixel rect {x, y, width, height, name} for a hyprctl monitor."""
+    width, height = _hypr_logical_size(mon)
+    return {
+        "x": mon.get("x", 0),
+        "y": mon.get("y", 0),
+        "width": int(width),
+        "height": int(height),
+        "name": mon.get("name", "?"),
+    }
+
+
 def get_monitor_at_cursor(cx, cy):
     """Find which monitor contains the given global cursor coordinates.
 
@@ -91,30 +127,14 @@ def get_monitor_at_cursor(cx, cy):
     for mon in _monitors_cache or []:
         mx = mon.get("x", 0)
         my = mon.get("y", 0)
-        # Use logical (transformed) size -- accounts for scaling and rotation
-        mw = mon.get("width", 1920) / mon.get("scale", 1.0)
-        mh = mon.get("height", 1080) / mon.get("scale", 1.0)
+        mw, mh = _hypr_logical_size(mon)
         if mx <= cx < mx + mw and my <= cy < my + mh:
-            return {
-                "x": mx,
-                "y": my,
-                "width": int(mw),
-                "height": int(mh),
-                "name": mon.get("name", "?"),
-            }
+            return hypr_logical_rect(mon)
 
     # Fallback: focused monitor
     for mon in _monitors_cache or []:
         if mon.get("focused", False):
-            mw = mon.get("width", 1920) / mon.get("scale", 1.0)
-            mh = mon.get("height", 1080) / mon.get("scale", 1.0)
-            return {
-                "x": mon.get("x", 0),
-                "y": mon.get("y", 0),
-                "width": int(mw),
-                "height": int(mh),
-                "name": mon.get("name", "?"),
-            }
+            return hypr_logical_rect(mon)
 
     return {"x": 0, "y": 0, "width": 1920, "height": 1080, "name": "fallback"}
 
@@ -130,17 +150,7 @@ def get_all_monitors_logical():
     if _monitors_cache is None:
         _refresh_monitors()
 
-    rects = []
-    for mon in _monitors_cache or []:
-        scale = mon.get("scale", 1.0) or 1.0
-        rects.append({
-            "x": mon.get("x", 0),
-            "y": mon.get("y", 0),
-            "width": int(mon.get("width", 1920) / scale),
-            "height": int(mon.get("height", 1080) / scale),
-            "name": mon.get("name", "?"),
-        })
-    return rects
+    return [hypr_logical_rect(mon) for mon in _monitors_cache or []]
 
 
 # ---------------------------------------------------------------------------
