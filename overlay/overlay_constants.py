@@ -7,13 +7,14 @@ across all overlay modules.
 SPDX-License-Identifier: GPL-3.0
 """
 
+import math
 import os
 import time as _time_mod
 
 __all__ = [
     "MENU_RADIUS", "SHADOW_OFFSET", "CENTER_ZONE_RADIUS", "ICON_ZONE_RADIUS",
     "SUBMENU_EXTEND", "WINDOW_SIZE", "compute_ring_scale", "map_logical_to_screen",
-    "hyprland_menu_center",
+    "hyprland_menu_center", "HOVER_ARM_DISTANCE", "hover_is_armed", "hover_gate",
     "IS_HYPRLAND", "IS_GNOME", "IS_COSMIC", "IS_KDE", "IS_SWAY", "IS_NIRI", "IS_X11",
     "_HAS_XWAYLAND",
     "_log",
@@ -28,6 +29,49 @@ CENTER_ZONE_RADIUS = 45
 ICON_ZONE_RADIUS = 100
 SUBMENU_EXTEND = 80  # Extra space for submenu items beyond main menu
 WINDOW_SIZE = (MENU_RADIUS + SHADOW_OFFSET + SUBMENU_EXTEND) * 2
+
+# Hover stays disarmed until the pointer has travelled this far (logical ring
+# pixels) from where it sat when the menu opened. The window is clamped
+# on-screen, so opening near a monitor edge puts the ring centre up to half a
+# window away from the cursor: the first hover sample then lands outside the
+# centre zone and the menu appears with an option already selected (issue #60).
+# Anchoring on that first sample also absorbs the hand jitter of pressing the
+# gesture button.
+HOVER_ARM_DISTANCE = 12
+
+
+def hover_is_armed(anchor, dx, dy):
+    """True once the pointer has moved clear of `anchor`, an (dx, dy) pair.
+
+    Offsets are measured from the ring centre in logical ring space, which every
+    placement path shares (Qt space on KDE, compositor space on Hyprland), so
+    the same comparison holds regardless of which one produced them.
+    """
+    if anchor is None:
+        return False
+    return math.hypot(dx - anchor[0], dy - anchor[1]) >= HOVER_ARM_DISTANCE
+
+
+def hover_gate(anchors, armed, source, dx, dy):
+    """Whether `source` may highlight a slice yet, updating its anchor state.
+
+    `anchors` is a {source: (dx, dy)} dict and `armed` a set of source names,
+    both reset on every menu open. Sources anchor and arm INDEPENDENTLY: the
+    daemon reports offsets from the press point while Qt reports them from the
+    ring centre, so one shared flag would let the daemon source, whose offsets
+    start at zero and are already covered by the centre zone, arm the Qt source
+    before it has seen its own first sample, which is the one carrying the clamp
+    offset this gate exists to swallow.
+    """
+    if source in armed:
+        return True
+    anchor = anchors.get(source)
+    if hover_is_armed(anchor, dx, dy):
+        armed.add(source)
+        return True
+    if anchor is None:
+        anchors[source] = (dx, dy)
+    return False
 
 # Ring scaling: the geometry above is the LOGICAL base (tuned at 1440p).
 # The window is scaled per-monitor so the ring keeps the same apparent

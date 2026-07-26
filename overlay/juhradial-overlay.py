@@ -98,6 +98,7 @@ from overlay_constants import (
     WINDOW_SIZE,
     compute_ring_scale,
     map_and_clamp_menu,
+    hover_gate,
     IS_HYPRLAND,
     IS_GNOME,
     IS_COSMIC,
@@ -444,6 +445,8 @@ class RadialMenu(RadialMenuPaintingMixin, QWidget):
         self.highlighted_slice = -1
         self.menu_center_x = 0
         self.menu_center_y = 0
+        self._hover_anchors = {}  # Per-source pointer offset the menu opened at
+        self._hover_armed = set()  # Sources whose pointer has deliberately moved
         self._paint_suppressed = False  # Suppress painting during COSMIC sync
 
         # Sub-menu state
@@ -876,6 +879,8 @@ class RadialMenu(RadialMenuPaintingMixin, QWidget):
         # move_x/move_y were computed above (Qt space on Hyprland, logical space
         # otherwise).
         self.highlighted_slice = -1
+        self._hover_anchors = {}
+        self._hover_armed = set()
         self.setWindowOpacity(0.0)
         self.move(move_x, move_y)
 
@@ -932,6 +937,17 @@ class RadialMenu(RadialMenuPaintingMixin, QWidget):
     def _get_center_radius(self):
         params = overlay_actions.RADIAL_PARAMS or {}
         return params.get("center_radius", params.get("ring_inner", CENTER_ZONE_RADIUS))
+
+    def _hover_gate(self, source, dx, dy):
+        """Whether hover may highlight a slice yet.
+
+        The window is clamped on-screen, so opening the menu near a monitor edge
+        leaves the pointer well off the ring centre and the very first hover
+        sample highlights a slice nobody aimed at (issue #60). Anchor on that
+        first sample and arm only once the pointer moves clear of it, which also
+        swallows the hand jitter of pressing the gesture button.
+        """
+        return hover_gate(self._hover_anchors, self._hover_armed, source, dx, dy)
 
     def _trigger_haptic(self, event):
         """Trigger haptic feedback via D-Bus call to daemon.
@@ -1081,6 +1097,8 @@ class RadialMenu(RadialMenuPaintingMixin, QWidget):
         # in physical pixels — convert to the ring's logical space first.
         dx /= self.ring_scale
         dy /= self.ring_scale
+        if not self._hover_gate("daemon", dx, dy):
+            return
         distance = math.hypot(dx, dy)
         center_radius = self._get_center_radius()
 
@@ -1315,6 +1333,8 @@ class RadialMenu(RadialMenuPaintingMixin, QWidget):
         # Physical offsets -> logical ring space
         dx = (pos_x - cx) / self.ring_scale
         dy = (pos_y - cy) / self.ring_scale
+        if not self._hover_gate("poll", dx, dy):
+            return
         distance = math.hypot(dx, dy)
         center_radius = self._get_center_radius()
 
@@ -1409,6 +1429,8 @@ class RadialMenu(RadialMenuPaintingMixin, QWidget):
         # Physical window coords -> logical ring space
         dx = (pos.x() - cx) / self.ring_scale
         dy = (pos.y() - cy) / self.ring_scale
+        if not self._hover_gate("mouse", dx, dy):
+            return
         distance = math.hypot(dx, dy)
         center_radius = self._get_center_radius()
 
