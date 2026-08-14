@@ -93,7 +93,8 @@ install -Dm644 assets/juhradial-mx.svg %{buildroot}%{_datadir}/icons/hicolor/sca
 install -Dm644 packaging/systemd/juhradialmx-daemon.service %{buildroot}%{_userunitdir}/juhradialmx-daemon.service
 
 # Install udev rules
-install -Dm644 packaging/udev/99-logitech-hidpp.rules %{buildroot}%{_udevrulesdir}/99-logitech-hidpp.rules
+install -Dm644 packaging/udev/99-juhradialmx.rules %{buildroot}%{_udevrulesdir}/99-juhradialmx.rules
+install -Dm644 packaging/udev/60-ydotool-uinput.rules %{buildroot}%{_udevrulesdir}/60-ydotool-uinput.rules
 
 
 %post
@@ -117,7 +118,8 @@ install -Dm644 packaging/udev/99-logitech-hidpp.rules %{buildroot}%{_udevrulesdi
 %{_datadir}/applications/juhradial-mx.desktop
 %{_datadir}/icons/hicolor/scalable/apps/juhradial-mx.svg
 %{_userunitdir}/juhradialmx-daemon.service
-%{_udevrulesdir}/99-logitech-hidpp.rules
+%{_udevrulesdir}/99-juhradialmx.rules
+%{_udevrulesdir}/60-ydotool-uinput.rules
 %changelog
 * Tue Jul 21 2026 Julian Hermstad <dev@juhlabs.com> - 0.4.1-1
 - Radial menu opens at the cursor on GNOME Wayland

@@ -84,7 +84,8 @@ package() {
     install -Dm644 packaging/systemd/juhradialmx-daemon.service "$pkgdir/usr/lib/systemd/user/juhradialmx-daemon.service"
 
     # Install udev rules
-    install -Dm644 packaging/udev/99-logitech-hidpp.rules "$pkgdir/usr/lib/udev/rules.d/99-logitech-hidpp.rules"
+    install -Dm644 packaging/udev/99-juhradialmx.rules "$pkgdir/usr/lib/udev/rules.d/99-juhradialmx.rules"
+    install -Dm644 packaging/udev/60-ydotool-uinput.rules "$pkgdir/usr/lib/udev/rules.d/60-ydotool-uinput.rules"
 
     # Install license
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
