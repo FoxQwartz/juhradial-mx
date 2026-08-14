@@ -67,7 +67,7 @@ GNOME and niri have specific setup notes (a Shell extension for GNOME, an XWayla
 
 Yes, it is safe. JuhRadial MX never writes or flashes firmware. It only sends standard HID++ feature commands that the mouse already exposes (DPI, scroll, haptics, easy-switch, battery queries) and reads input events.
 
-Button "diverts" (which let the daemon intercept the gesture and haptic buttons) are applied with the HID++ **volatile** flag. Volatile diverts are not persisted to the device and are cleared automatically on unplug, reboot, or hotplug. The daemon simply re-applies them when the device reconnects. Nothing about your mouse's saved state is permanently changed.
+Button "diverts" (which let the daemon intercept the gesture and haptic buttons) are applied with the HID++ **volatile** flag. Volatile diverts are not persisted to the device and are cleared automatically on unplug, reboot, power-off, radio sleep, or hotplug. The daemon re-applies them whenever the radio is seen again: after a hidraw/`event*` hotplug, after an Easy-Switch return, and after the mouse wakes from sleep or the power switch (wake broadcast or the next successful battery poll). Nothing about your mouse's saved state is permanently changed.
 
 ### Does it need root?
 

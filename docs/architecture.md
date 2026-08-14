@@ -75,7 +75,7 @@ flowchart TD
 
 `main.rs` spawns these concurrent tasks:
 
-- **hidraw loop** (`run_hidraw_loop`): connects to the device's hidraw node, re-applies volatile button diverts, thumb-wheel divert, and notification feature indices on every (re)connect, then reads diverted events. It owns re-applying diverts because they are reset by hotplug and Easy-Switch host changes.
+- **hidraw loop** (`run_hidraw_loop`): connects to the device's hidraw node, re-applies volatile button diverts, thumb-wheel divert, and notification feature indices on every (re)connect, then reads diverted events. It owns re-applying diverts because they are reset by hotplug and Easy-Switch host changes. Bolt/Unifying receivers keep their hidraw and `event*` nodes while the mouse is off or asleep, so liveness is not node presence alone: the reader also treats the device's Wireless Device Status (0x1D4B) wake broadcast and the receiver's device-connection notification as reconnects, and the battery poller wakes the loops when a failing query starts succeeding again (issue #102). The `/dev/input` watcher still ignores `Access` events (issue #15).
 - **MX evdev loop** (`run_evdev_loop`) and **generic evdev loop** (`run_generic_evdev_loop`): run simultaneously so either a Logitech MX or a generic mouse can trigger the wheel. The generic loop uses a configurable trigger button read from config.
 - **event processing** (`process_gesture_events`): consumes `GestureEvent`s and turns them into D-Bus signals or action injection.
 - **battery updater**: polls battery and writes the shared state behind `GetBatteryStatus`.

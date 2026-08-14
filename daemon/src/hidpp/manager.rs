@@ -772,6 +772,7 @@ impl HapticManager {
             change_host: device.feature_index(features::CHANGE_HOST),
             dpi: device.feature_index(features::ADJUSTABLE_DPI),
             hires_wheel: device.feature_index(features::HIRES_WHEEL),
+            wireless_status: device.feature_index(features::WIRELESS_DEVICE_STATUS),
         }
     }
 

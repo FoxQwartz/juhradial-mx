@@ -275,6 +275,18 @@ id -nG | grep input
 
 **Fix.** Update to a build where the button you want is included in the divert set, and re-apply config after a reconnect (`ReloadConfig`, or just trigger the daemon's reconnect path by re-plugging). If your assignment still does nothing after a reload, the CID for that button is not yet diverted: note which physical button in a GitHub issue. See [Features](features.md) for which buttons are remappable.
 
+### Problem: the gesture button works, then dies after the mouse sleeps or is switched off
+
+**Cause.** Button divert is a volatile HID++ flag, and the mouse clears it on power-off and on radio sleep. The Logi Bolt receiver (`046d:c548`) stays enumerated the whole time, so `/dev/hidraw*` and `/dev/input/event*` never disappear and builds up to 0.4.1 saw no reconnect to react to ([#102](https://github.com/JuhLabs/juhradial-mx/issues/102)).
+
+**Fix.** Update to 0.4.2 or later: the daemon now re-applies volatile diverts when the mouse announces it is back online (Wireless Device Status broadcast or the receiver's device-connection notification), when a failing battery poll starts succeeding again, and on every `ReloadConfig` (a Settings save). On older builds, restart only the daemon after a wake:
+
+```bash
+systemctl --user restart juhradialmx-daemon
+```
+
+Re-plugging the dongle also forces a reconnect on older builds. If `ps -ef | grep -E 'juhradiald|juhradial-overlay'` shows two daemons or two overlays, that is issue [#60](https://github.com/JuhLabs/juhradial-mx/issues/60) (single instance), not this bug.
+
 ---
 
 ## Haptics and battery

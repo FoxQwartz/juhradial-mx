@@ -31,7 +31,7 @@ systemctl --user restart juhradialmx-daemon.service
 - Missing fields fall back to defaults, so a minimal `{}` file is valid. On first run the Settings app auto-detects your desktop environment and fills in environment-appropriate commands for the radial slices (controlled by the internal `de_defaults_applied` flag).
 
 !!! warning
-    The daemon writes only VOLATILE HID++ state to the device (no onboard-memory writes). Diverts and hardware overrides are re-applied on reconnect and on `ReloadConfig`, so a hotplugged mouse comes back to your configured state automatically.
+    The daemon writes only VOLATILE HID++ state to the device (no onboard-memory writes). Diverts and hardware overrides are re-applied on reconnect, on radio wake (power switch / sleep, where the receiver's device nodes never disappear), and on `ReloadConfig` (which re-diverts the gesture and haptic buttons too), so the mouse comes back to your configured state automatically.
 
 
 ## Top-level structure of config.json

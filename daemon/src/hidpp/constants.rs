@@ -88,6 +88,14 @@ pub mod features {
     /// Used for reading current Easy-Switch status - we only use function 0
     pub const CHANGE_HOST: u16 = 0x1814;
 
+    /// Wireless Device Status (0x1D4B)
+    ///
+    /// READ-ONLY here: we never call this feature. Its index is looked up so
+    /// the hidraw reader can decode the device-originated status broadcast the
+    /// mouse sends when it comes back online after power-off or radio sleep.
+    /// That broadcast is the signal to re-apply volatile diverts (issue #102).
+    pub const WIRELESS_DEVICE_STATUS: u16 = 0x1D4B;
+
     /// Host Info - READ-ONLY access to paired host names (0x1815)
     /// Functions: [0] getHostInfo, [1] getHostDescriptor, [3] getHostFriendlyName
     /// NOTE: This is blocklisted for WRITE but READ is safe for getting host names
@@ -175,6 +183,7 @@ pub mod allowed_features {
         features::HIRES_WHEEL,
         features::REPROG_CONTROLS_V4,
         features::THUMB_WHEEL,
+        features::WIRELESS_DEVICE_STATUS,
     ];
 
     /// Check if a feature ID is explicitly allowed

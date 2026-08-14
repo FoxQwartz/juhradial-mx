@@ -27,6 +27,12 @@ pub enum HardwareNotification {
     HostChanged { host: u8 },
     /// Pointer DPI changed (ADJUSTABLE_DPI 0x2201).
     DpiChanged { dpi: u16 },
+    /// Device came (back) online (WIRELESS_DEVICE_STATUS 0x1D4B broadcast).
+    ///
+    /// The mouse sends this after power-on and after waking from radio sleep,
+    /// exactly the moments it has cleared its volatile HID++ state. Consumers
+    /// treat it as "re-apply diverts now" (issue #102). Not surfaced on D-Bus.
+    DeviceConnected,
 }
 
 /// Feature indices for the notification-bearing features on the connected
@@ -38,6 +44,7 @@ pub struct NotificationIndices {
     pub change_host: Option<u8>,
     pub dpi: Option<u8>,
     pub hires_wheel: Option<u8>,
+    pub wireless_status: Option<u8>,
 }
 
 impl NotificationIndices {
@@ -56,6 +63,9 @@ impl NotificationIndices {
         }
         if self.hires_wheel == Some(feature_index) {
             return decode_ratchet(data);
+        }
+        if self.wireless_status == Some(feature_index) {
+            return decode_wireless_status(data);
         }
         None
     }
@@ -105,6 +115,19 @@ fn decode_dpi(data: &[u8]) -> Option<HardwareNotification> {
         return None;
     }
     Some(HardwareNotification::DpiChanged { dpi })
+}
+
+/// WIRELESS_DEVICE_STATUS 0x1D4B `statusBroadcast` event.
+///
+/// Payload (from byte 4): `[status, request, reason]` with status 1 =
+/// reconnection and request 1 = "software should reconfigure the device".
+/// The device only ever broadcasts on this feature when it (re)connects, so
+/// any event here means the radio is back and volatile state is gone.
+fn decode_wireless_status(data: &[u8]) -> Option<HardwareNotification> {
+    if data.len() < 5 {
+        return None;
+    }
+    Some(HardwareNotification::DeviceConnected)
 }
 
 /// HiResWheel 0x2121 `ratchetSwitchChanged` event: byte 4 bit 0 = ratchet
@@ -164,6 +187,22 @@ mod tests {
             idx.route(0x05, &report(0x05, &[0x00])),
             Some(HardwareNotification::RatchetChanged { ratchet: false })
         );
+    }
+
+    #[test]
+    fn routes_wireless_status_broadcast() {
+        let idx = NotificationIndices { wireless_status: Some(0x0c), ..Default::default() };
+        // statusBroadcast: status=1 (reconnection), request=1 (reconfigure), reason=0
+        assert_eq!(
+            idx.route(0x0c, &report(0x0c, &[0x01, 0x01, 0x00])),
+            Some(HardwareNotification::DeviceConnected)
+        );
+    }
+
+    #[test]
+    fn wireless_status_without_index_never_matches() {
+        let idx = NotificationIndices { battery: Some(0x06), ..Default::default() };
+        assert_eq!(idx.route(0x0c, &report(0x0c, &[0x01, 0x01, 0x00])), None);
     }
 
     #[test]

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Gesture button survives the power switch and radio sleep** - The mouse clears its volatile HID++ button divert when switched off or sleeping, but the Bolt receiver keeps its device nodes, so the daemon never saw a reconnect and the gesture and haptic buttons stayed dead until a restart. The daemon now re-applies all volatile state (gesture/haptic divert, reassigned buttons, thumb-wheel reporting) when the mouse announces it is back online, when a failing battery poll recovers, and on `ReloadConfig`, which now also re-diverts the gesture and haptic buttons. Fixes [#102](https://github.com/JuhLabs/juhradial-mx/issues/102).
 - **Settings UI and overlay render on Debian/Ubuntu** - The PyGObject cairo bindings (`python3-gi-cairo`) were missing from the Debian/Ubuntu install path. On those distros `python3-gi` does not pull in cairo, so GTK4/libadwaita widgets failed to render. The installer, the installation guide, and the contributor setup now install `python3-gi-cairo`. The Fedora and Arch packaging already list cairo explicitly; those paths and openSUSE are unchanged.
 - **Arch PKGBUILD and Fedora RPM spec build again** - Both still installed the removed `packaging/udev/99-logitech-hidpp.rules`, so `makepkg` and `rpmbuild` failed in the packaging step. They now install the current `99-juhradialmx.rules` (and `60-ydotool-uinput.rules` for uinput access, matching `install.sh`). Fixes [#89](https://github.com/JuhLabs/juhradial-mx/issues/89).
 
