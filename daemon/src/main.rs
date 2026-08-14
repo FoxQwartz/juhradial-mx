@@ -500,9 +500,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // writes, so GetBatteryStatus reflects them even when the active query fails.
     let battery_state_for_events = battery_state.clone();
 
+    // Start inotify watcher on /dev/input/ for instant device hotplug detection.
+    // Shared across the evdev loops and the hidraw loop; the battery updater
+    // also fires it when a failing poll starts succeeding again, which is how
+    // a Bolt radio wake is detected without any node hotplug (issue #102).
+    let hotplug_notify = spawn_device_hotplug_watcher();
+
     // Spawn battery status updater (shares HidppDevice with haptic via SharedHapticManager)
+    let battery_radio_recovered = hotplug_notify.clone();
     let battery_handle = tokio::spawn(async move {
-        start_battery_updater_shared(battery_state, haptic_manager_for_battery).await
+        start_battery_updater_shared(
+            battery_state,
+            haptic_manager_for_battery,
+            battery_radio_recovered,
+        )
+        .await
     });
 
     // Load profiles (Story 3.1: Task 5)
@@ -594,10 +606,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
-
-    // Start inotify watcher on /dev/input/ for instant device hotplug detection.
-    // Shared across both evdev loops so they re-scan immediately on device changes.
-    let hotplug_notify = spawn_device_hotplug_watcher();
 
     // Create channel for gesture events
     let (event_tx, mut event_rx) = mpsc::channel::<GestureEvent>(32);
@@ -985,7 +993,16 @@ async fn run_hidraw_loop(
 
                 match start_result {
                     Some(Ok(())) => {
-                        info!("HID++ event loop ended normally");
+                        if handler.take_divert_refresh_needed() {
+                            // The mouse announced it came back online (power
+                            // switch / radio sleep); its volatile diverts are
+                            // gone. Loop immediately so the refresh path above
+                            // re-applies them (issue #102).
+                            info!("Device back online, re-applying HID++ diverts");
+                            retry_immediately = true;
+                        } else {
+                            info!("HID++ event loop ended normally");
+                        }
                     }
                     Some(Err(HidrawError::DeviceNotFound)) => {
                         warn!("HID++ device disconnected, will poll for reconnection...");
@@ -1065,22 +1082,35 @@ async fn run_evdev_loop(
                     device_info.path, device_info.name
                 );
 
-                // Run the event loop until device disconnects
-                match handler.start().await {
-                    Ok(()) => {
+                // Run the event loop until device disconnect OR hotplug. The
+                // grabbed fd lives inside start(); without the hotplug arm a
+                // re-enumeration that leaves the old node present kept the
+                // loop glued to a dead grab. Cancelling start() drops its
+                // device handle, which closes the fd and releases the grab.
+                let start_result = tokio::select! {
+                    result = handler.start() => Some(result),
+                    _ = hotplug.notified() => None,
+                };
+                match start_result {
+                    Some(Ok(())) => {
                         info!("Event loop ended normally");
                     }
-                    Err(EvdevError::DeviceNotFound) => {
+                    Some(Err(EvdevError::DeviceNotFound)) => {
                         warn!("Device disconnected, will poll for reconnection...");
                         logged_waiting = false;
                     }
-                    Err(EvdevError::PermissionDenied) => {
+                    Some(Err(EvdevError::PermissionDenied)) => {
                         error!("Permission denied. Ensure udev rules are installed.");
                         error!("Run: sudo usermod -aG input $USER && logout");
                         // Continue polling in case permissions are fixed
                     }
-                    Err(EvdevError::IoError(e)) => {
+                    Some(Err(EvdevError::IoError(e))) => {
                         error!("I/O error: {}. Will retry...", e);
+                    }
+                    None => {
+                        info!("Device hotplug detected, re-scanning MX devices");
+                        logged_waiting = false;
+                        continue;
                     }
                 }
             }
@@ -1394,6 +1424,11 @@ async fn emit_hardware_notification(
             connection
                 .emit_signal(None::<&str>, DBUS_PATH, iface, "DpiChanged", &(dpi,))
                 .await?;
+        }
+        HN::DeviceConnected => {
+            // Handled inside the hidraw reader (divert refresh, issue #102);
+            // nothing to surface on D-Bus.
+            debug!("Device connected (notification)");
         }
     }
     Ok(())

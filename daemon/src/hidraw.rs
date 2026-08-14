@@ -31,6 +31,20 @@ pub const FEATURE_REPROG_CONTROLS_V4: u16 = 0x1B04;
 /// Diverted button notification function ID
 pub const DIVERTED_BUTTONS_EVENT: u8 = 0x00;
 
+/// HID++ 1.0 receiver notification sub-id: "device connection". Bolt and
+/// Unifying receivers emit this SHORT report when a paired device's radio
+/// link comes up or goes down, with byte 4 bit 6 set when the link is NOT
+/// established. It arrives on the same hidraw node as the 2.0 feature
+/// events, with the sub-id in the byte that 2.0 uses for the feature index.
+pub const RECEIVER_CONNECTION_SUB_ID: u8 = 0x41;
+
+/// Minimum spacing between divert-refresh triggers. A flapping radio link
+/// (mouse at the edge of range) can emit connection notifications in bursts;
+/// re-applying diverts is idempotent but costs HID++ round-trips, so bursts
+/// are coalesced instead of refreshing per report (same spirit as the 500ms
+/// hotplug debounce that guards issue #15).
+const DIVERT_REFRESH_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Known button CIDs (Control IDs) for MX Master 4
 pub mod button_cid {
     /// Middle button
@@ -80,6 +94,14 @@ pub struct HidrawHandler {
     /// Live KWin availability (D-Bus name ownership), used to pick the cursor
     /// backend on KDE instead of the XDG_CURRENT_DESKTOP env var (issue #32).
     kwin_available: Option<crate::compositor::KWinAvailability>,
+    /// Set when the device announced it came (back) online, meaning its
+    /// volatile HID++ state (button/thumb-wheel divert) is gone and must be
+    /// re-applied (issue #102). `start()` returns so the hidraw loop can run
+    /// its existing refresh path; the loop reads the flag via
+    /// `take_divert_refresh_needed()`.
+    divert_refresh_needed: bool,
+    /// Timestamp of the last accepted refresh trigger, for debouncing.
+    last_refresh_trigger: Option<Instant>,
 }
 
 /// Map HID++ CID to evdev key code for macro trigger forwarding
@@ -119,6 +141,8 @@ impl HidrawHandler {
             thumbwheel_feature_index: None,
             notification_indices: Default::default(),
             kwin_available: None,
+            divert_refresh_needed: false,
+            last_refresh_trigger: None,
         }
     }
 
@@ -151,6 +175,28 @@ impl HidrawHandler {
     /// Set the shared configuration for button action lookup
     pub fn set_shared_config(&mut self, config: crate::config::SharedConfig) {
         self.shared_config = Some(config);
+    }
+
+    /// Record that the device came (back) online and needs its volatile
+    /// diverts re-applied. Debounced so a flapping radio link cannot turn
+    /// into a refresh storm.
+    fn flag_divert_refresh(&mut self, reason: &str) {
+        let now = Instant::now();
+        if let Some(last) = self.last_refresh_trigger {
+            if now.duration_since(last) < DIVERT_REFRESH_DEBOUNCE {
+                tracing::debug!(reason, "Divert refresh trigger debounced");
+                return;
+            }
+        }
+        self.last_refresh_trigger = Some(now);
+        self.divert_refresh_needed = true;
+        tracing::info!(reason, "Device back online - volatile diverts need re-apply");
+    }
+
+    /// Consume the divert-refresh flag. Returns true when `start()` exited
+    /// because the device came back online (issue #102).
+    pub fn take_divert_refresh_needed(&mut self) -> bool {
+        std::mem::take(&mut self.divert_refresh_needed)
     }
 
     /// Look up the configured action for a CID from shared config
@@ -323,6 +369,12 @@ impl HidrawHandler {
             match read_result {
                 Ok(len) if len >= 7 => {
                     self.process_hidpp_report(&buf[..len]).await;
+                    // The device announced it came back online (power switch,
+                    // radio sleep): its volatile diverts are gone. Return so
+                    // the hidraw loop re-applies them (issue #102).
+                    if self.divert_refresh_needed {
+                        return Ok(());
+                    }
                 }
                 Ok(_) => {
                     // Short read, ignore
@@ -368,6 +420,18 @@ impl HidrawHandler {
             return;
         }
 
+        // Receiver-protocol "device connection" notification: the Bolt keeps
+        // its hidraw node while the mouse is off or asleep, so this SHORT
+        // report (not any node hotplug) is what signals the radio coming back.
+        // Byte 4 bit 6 set means "link not established" - only a link-up
+        // report triggers a divert refresh (issue #102).
+        if report_type == HIDPP_SHORT && feature_index == RECEIVER_CONNECTION_SUB_ID {
+            if data.len() >= 5 && (data[4] & 0x40) == 0 {
+                self.flag_divert_refresh("receiver device-connection notification");
+            }
+            return;
+        }
+
         // Log all HID++ reports for debugging
         tracing::debug!(
             report_type = format!("0x{:02X}", report_type),
@@ -387,6 +451,22 @@ impl HidrawHandler {
         if (function_sw_id & 0x0F) == 0 {
             if let Some(note) = self.notification_indices.route(feature_index, data) {
                 tracing::debug!(?note, "Hardware notification decoded");
+                use crate::hidpp::notifications::HardwareNotification as HN;
+                match note {
+                    // Wireless Device Status broadcast: the mouse just came
+                    // back online and has cleared its volatile HID++ state.
+                    // Internal signal only - nothing to surface on D-Bus.
+                    HN::DeviceConnected => {
+                        self.flag_divert_refresh("wireless device status broadcast");
+                        return;
+                    }
+                    // An Easy-Switch return also clears volatile state; keep
+                    // emitting the D-Bus signal as before, but refresh too.
+                    HN::HostChanged { .. } => {
+                        self.flag_divert_refresh("Easy-Switch host change");
+                    }
+                    _ => {}
+                }
                 let _ = self.event_tx.send(GestureEvent::Hardware(note)).await;
                 return;
             }
@@ -820,5 +900,73 @@ mod tests {
 
         assert!(!handler.is_connected());
         assert_eq!(handler.device_path(), None);
+    }
+
+    fn test_handler() -> HidrawHandler {
+        // The receiver is dropped: none of these reports reach the event
+        // channel (connection paths return before sending), and the handler
+        // ignores send failures anyway.
+        let (tx, _rx) = mpsc::channel(4);
+        HidrawHandler::new(tx)
+    }
+
+    // Issue #102: a receiver "device connection" notification with the link
+    // established must request a divert refresh...
+    #[tokio::test]
+    async fn receiver_link_up_requests_divert_refresh() {
+        let mut h = test_handler();
+        // [report, device idx, sub-id 0x41, protocol, device info (bit6 clear)]
+        let report = [0x10, 0x01, 0x41, 0x04, 0x02, 0x00, 0x00];
+        h.process_hidpp_report(&report).await;
+        assert!(h.take_divert_refresh_needed());
+        // take() consumes the flag
+        assert!(!h.take_divert_refresh_needed());
+    }
+
+    // ...while a link-DOWN notification (bit 6 set: mouse switched off) must not.
+    #[tokio::test]
+    async fn receiver_link_down_does_not_request_refresh() {
+        let mut h = test_handler();
+        let report = [0x10, 0x01, 0x41, 0x04, 0x42, 0x00, 0x00];
+        h.process_hidpp_report(&report).await;
+        assert!(!h.take_divert_refresh_needed());
+    }
+
+    // A LONG report whose feature index happens to be 0x41 is device feature
+    // traffic, not a receiver notification, and must not trigger a refresh.
+    #[tokio::test]
+    async fn long_report_with_0x41_index_is_not_a_connection_notification() {
+        let mut h = test_handler();
+        let report = [0x11, 0x01, 0x41, 0x00, 0x02, 0x00, 0x00];
+        h.process_hidpp_report(&report).await;
+        assert!(!h.take_divert_refresh_needed());
+    }
+
+    // Issue #102: the Wireless Device Status (0x1D4B) broadcast the mouse
+    // sends after power-on / radio sleep must request a divert refresh.
+    #[tokio::test]
+    async fn wireless_status_broadcast_requests_divert_refresh() {
+        let mut h = test_handler();
+        h.set_notification_indices(crate::hidpp::notifications::NotificationIndices {
+            wireless_status: Some(0x0c),
+            ..Default::default()
+        });
+        // statusBroadcast: sw_id nibble 0, status=1, request=1
+        let report = [0x11, 0x01, 0x0c, 0x00, 0x01, 0x01, 0x00];
+        h.process_hidpp_report(&report).await;
+        assert!(h.take_divert_refresh_needed());
+    }
+
+    // Issue #15 spirit: a burst of connection notifications (flapping link)
+    // must coalesce into one refresh, not a refresh storm.
+    #[tokio::test]
+    async fn refresh_triggers_are_debounced() {
+        let mut h = test_handler();
+        let report = [0x10, 0x01, 0x41, 0x04, 0x02, 0x00, 0x00];
+        h.process_hidpp_report(&report).await;
+        assert!(h.take_divert_refresh_needed());
+        // Immediately after, within the debounce window: no second trigger.
+        h.process_hidpp_report(&report).await;
+        assert!(!h.take_divert_refresh_needed());
     }
 }

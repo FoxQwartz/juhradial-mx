@@ -257,6 +257,23 @@ impl JuhRadialService {
                         for cid in Config::managed_button_cids() {
                             let _ = manager.set_button_divert(cid, remapped.contains(&cid));
                         }
+
+                        // Also re-divert the gesture and haptic buttons. Their
+                        // divert is volatile and the mouse clears it on
+                        // power-off / radio sleep (issue #102), so a Settings
+                        // save doubles as a manual recovery without waiting
+                        // for the next reconnect.
+                        match manager.divert_buttons() {
+                            Ok(n) if n > 0 => tracing::info!(
+                                count = n,
+                                "Gesture buttons re-diverted on reload"
+                            ),
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!(
+                                error = %e,
+                                "Failed to re-divert gesture buttons on reload"
+                            ),
+                        }
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to lock haptic manager for update");

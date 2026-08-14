@@ -491,6 +491,7 @@ pub async fn start_battery_updater(state: SharedBatteryState) {
 pub async fn start_battery_updater_shared(
     state: SharedBatteryState,
     haptic_manager: crate::hidpp::SharedHapticManager,
+    radio_recovered: std::sync::Arc<tokio::sync::Notify>,
 ) {
     let mut consecutive_errors = 0u32;
 
@@ -534,6 +535,9 @@ pub async fn start_battery_updater_shared(
             tracing::info!(percentage, charging, "Initial battery state");
         }
         Err(e) => {
+            // Count the failure so a later success is treated as a radio
+            // recovery (e.g. daemon started while the mouse was asleep).
+            consecutive_errors = 1;
             let mut s = state.write().await;
             s.available = false;
             s.error = Some(format!("{}", e));
@@ -553,6 +557,19 @@ pub async fn start_battery_updater_shared(
 
         match result {
             Ok((percentage, charging)) => {
+                if consecutive_errors > 0 {
+                    // Fail-then-success means the radio was down (mouse off or
+                    // asleep) and is back. The Bolt receiver keeps its device
+                    // nodes through that, so no hotplug fires; wake the device
+                    // loops so volatile diverts are re-applied (issue #102).
+                    // This piggybacks on the existing poll: no extra HID++
+                    // traffic, and it fires once per outage, not periodically.
+                    tracing::info!(
+                        after_failures = consecutive_errors,
+                        "Battery query recovered - waking device loops to re-apply volatile state"
+                    );
+                    radio_recovered.notify_waiters();
+                }
                 consecutive_errors = 0;
                 let mut s = state.write().await;
                 s.percentage = percentage;
