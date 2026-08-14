@@ -121,6 +121,11 @@ install -Dm644 packaging/udev/60-ydotool-uinput.rules %{buildroot}%{_udevrulesdi
 %{_udevrulesdir}/99-juhradialmx.rules
 %{_udevrulesdir}/60-ydotool-uinput.rules
 %changelog
+* Fri Aug 14 2026 Julian Hermstad <dev@juhlabs.com> - 0.4.2-1
+- Gesture button survives the power switch and radio sleep (#102)
+- PKGBUILD and RPM spec install the current udev rules file (#89)
+- Debian/Ubuntu installs pull python3-gi-cairo for the Settings UI (#100)
+
 * Tue Jul 21 2026 Julian Hermstad <dev@juhlabs.com> - 0.4.1-1
 - Radial menu opens at the cursor on GNOME Wayland
 - Second tap closes the menu again
