@@ -33,6 +33,8 @@ grep -q "python3-PyQt6" "$SRC/install.sh" && echo "  ok: python3-PyQt6 present (
 grep -q "python3-qt6-svg" "$SRC/install.sh" && echo "  WARN: stale python3-qt6-svg still present (#24)" || echo "  ok: stale python3-qt6-svg gone (#24)"
 grep -q 'id -u' "$SRC/install.sh" && grep -q 'id -g' "$SRC/install.sh" && echo "  ok: installer uses numeric uid/gid (#52)" || echo "  WARN: installer not using numeric uid/gid (#52)"
 grep -q '\$USER:\$USER' "$SRC/install.sh" && echo "  WARN: installer still assumes username equals group name (#52)" || echo "  ok: no \$USER:\$USER group assumption (#52)"
+grep -rq '99-logitech-hidpp.rules' "$SRC/packaging/arch/PKGBUILD" "$SRC/packaging/rpm/juhradial-mx.spec" && echo "  WARN: packaging still references removed 99-logitech-hidpp.rules (#89)" || echo "  ok: packaging installs 99-juhradialmx.rules (#89)"
+grep -q 'KERNELS=="0005:046D' "$SRC/packaging/udev/99-juhradialmx.rules" && echo "  ok: Bluetooth KERNELS match present in udev rules (#19)" || echo "  WARN: Bluetooth KERNELS match missing from udev rules (#19)"
 echo
 
 # Bootstrap a new-enough Rust (mirrors install.sh ensure_rust_toolchain) then
