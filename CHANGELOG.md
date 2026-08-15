@@ -5,11 +5,16 @@ All notable changes to JuhRadial MX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.3] - 2026-08-15
 
 ### Added
 
 - **Custom quick links in the radial submenu** - The submenu slice (previously fixed to Claude, ChatGPT, Gemini, and Perplexity) is now editable: the slice dialog in Settings offers up to four label + URL rows, so the wheel can open any web page. Known AI domains keep their brand icons, other links get a browser glyph, and leaving the rows empty keeps the familiar AI defaults. The preset is now called "Quick Links".
+
+### Changed
+
+- **Faster, smoother radial menu** - A performance wave contributed by [@frizikk](https://github.com/frizikk): cursor movement is coalesced to one update per physical input frame ([#91](https://github.com/JuhLabs/juhradial-mx/pull/91)), submenu frames that did not change are no longer repainted ([#95](https://github.com/JuhLabs/juhradial-mx/pull/95)), haptic pulses are dispatched asynchronously so a busy daemon cannot stall the menu open ([#93](https://github.com/JuhLabs/juhradial-mx/pull/93)), the play/pause glyph queries the media player without blocking and only when a media slice is configured ([#94](https://github.com/JuhLabs/juhradial-mx/pull/94)), and on KDE the menu-open path talks to KWin over native D-Bus calls instead of spawning two helper processes each time, also cleaning up one-shot cursor scripts KWin used to accumulate ([#98](https://github.com/JuhLabs/juhradial-mx/pull/98)).
+- **Lower idle footprint** - Also from [@frizikk](https://github.com/frizikk): Flow stops rewriting its status file every 5 seconds while no other machine is connected ([#92](https://github.com/JuhLabs/juhradial-mx/pull/92)), Flow edge polling relaxes to 32 ms while the cursor is away from the handoff edge ([#96](https://github.com/JuhLabs/juhradial-mx/pull/96)), and X11 active-window tracking watches for focus changes with a persistent `xprop -spy` instead of polling every 750 ms ([#99](https://github.com/JuhLabs/juhradial-mx/pull/99)).
 
 ## [0.4.2] - 2026-08-14
 
@@ -350,6 +355,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Native Wayland** - Full support for KDE Plasma 6 and Hyprland
 - Support for MX Master 4, MX Master 3S, and MX Master 3
 
+[0.4.3]: https://github.com/JuhLabs/juhradial-mx/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/JuhLabs/juhradial-mx/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/JuhLabs/juhradial-mx/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/JuhLabs/juhradial-mx/compare/v0.3.2-beta...v0.4.0
 [0.3.2-beta]: https://github.com/JuhLabs/juhradial-mx/compare/v0.3.1-beta...v0.3.2-beta

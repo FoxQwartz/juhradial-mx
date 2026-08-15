@@ -2,7 +2,7 @@
 # Build: rpmbuild -ba juhradial-mx.spec
 
 Name:           juhradial-mx
-Version:        0.4.2
+Version:        0.4.3
 Release:        1%{?dist}
 Summary:        Beautiful radial menu for Logitech MX Master mice on Linux
 
@@ -121,6 +121,12 @@ install -Dm644 packaging/udev/60-ydotool-uinput.rules %{buildroot}%{_udevrulesdi
 %{_udevrulesdir}/99-juhradialmx.rules
 %{_udevrulesdir}/60-ydotool-uinput.rules
 %changelog
+* Sat Aug 15 2026 Julian Hermstad <dev@juhlabs.com> - 0.4.3-1
+- Editable quick links in the radial submenu (#105)
+- Radial menu performance wave: frame-coalesced cursor updates, skipped
+  stable repaints, async haptics and media state, native KWin D-Bus calls
+- Lower idle footprint: Flow status writes, edge polling cadence, xprop -spy
+
 * Fri Aug 14 2026 Julian Hermstad <dev@juhlabs.com> - 0.4.2-1
 - Gesture button survives the power switch and radio sleep (#102)
 - PKGBUILD and RPM spec install the current udev rules file (#89)
