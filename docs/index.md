@@ -29,9 +29,9 @@ The installer detects your distro, installs dependencies, builds from source, an
 | [Architecture](architecture.md) | How it works, for contributors |
 | [FAQ](faq.md) | Quick answers to common questions |
 
-## What is new in v0.4.1
+## What is new in v0.4.4
 
-The radial menu now opens on the cursor on GNOME Wayland, a second tap closes it again, only one overlay runs at a time, thumb-wheel assignments in the Buttons tab take effect, and the screenshot action picks a tool that works on the desktop you are running. See the [Changelog](https://github.com/JuhLabs/juhradial-mx/blob/master/CHANGELOG.md).
+SmartShift and hi-res scroll settings now really program the mouse. Earlier builds spoke the wrong HID++ dialect to the SmartShift feature the MX Master 3/3S/4 expose, so wheel-mode and threshold changes reported success while changing nothing, and toggling smooth scrolling could silently rewrite the ratchet mode. v0.4.4 fixes the protocol, makes all three wheel modes (SmartShift, ratchet, free-spin) stick on the hardware, primes the Settings wheel and battery readouts on open, and reports the real connection type (Bolt, Unifying, or Bluetooth). See the [Changelog](https://github.com/JuhLabs/juhradial-mx/blob/master/CHANGELOG.md).
 
 ## A look at it
 

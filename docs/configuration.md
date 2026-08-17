@@ -259,7 +259,7 @@ Slice `type` values:
 | `natural` | bool | `false` | Invert scroll direction |
 | `smooth` | bool | `true` | Hi-res (free-spin) scrolling versus ratchet clicks |
 | `smartshift` | bool | `true` | Auto-disengage the ratchet on fast flicks |
-| `smartshift_threshold` | int | `50` | Flick force (0 to 100) that triggers free-spin |
+| `smartshift_threshold` | int | `50` | Flick force (1 to 100) that triggers free-spin |
 | `mode` | string | `smartshift` | Scroll mode selector |
 | `speed` | int | (UI) | Scroll speed, written by the Point & Scroll page |
 

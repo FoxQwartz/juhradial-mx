@@ -287,6 +287,14 @@ systemctl --user restart juhradialmx-daemon
 
 Re-plugging the dongle also forces a reconnect on older builds. If `ps -ef | grep -E 'juhradiald|juhradial-overlay'` shows two daemons or two overlays, that is issue [#60](https://github.com/JuhLabs/juhradial-mx/issues/60) (single instance), not this bug.
 
+### Scroll wheel mode and SmartShift settings do nothing
+
+**Symptom.** Switching between SmartShift, ratchet, and free-spin in Settings, or moving the sensitivity slider, reports success but the wheel behaves exactly as before. The Settings threshold always reads the same value no matter what the wheel is set to. On some setups, toggling smooth or natural scrolling changed the ratchet feel instead.
+
+**Cause.** Builds up to 0.4.3 called the SmartShift feature with the wrong HID++ function IDs on the MX Master 3/3S/4 (these mice expose SmartShift Enhanced `0x2111`, whose functions differ from the legacy `0x2110` layout), so reads returned a constant and writes landed on a getter. Hi-res scroll calls were additionally misrouted into the SmartShift feature ([#106](https://github.com/JuhLabs/juhradial-mx/issues/106), [#107](https://github.com/JuhLabs/juhradial-mx/issues/107)).
+
+**Fix.** Update to 0.4.4 or later. No configuration changes are needed; the same Settings controls now program the device, and the Devices page wheel readout shows the live mode ([#108](https://github.com/JuhLabs/juhradial-mx/issues/108)).
+
 ---
 
 ## Haptics and battery
