@@ -557,7 +557,7 @@ class ScrollPage(Gtk.ScrolledWindow):
         else:
             # SmartShift
             threshold = int(self.sens_scale.get_value())
-            device_threshold = int((100 - threshold) * 2.55)
+            device_threshold = max(1, min(254, int((100 - threshold) * 2.55)))
             self._apply_smartshift_to_device(True, device_threshold)
 
     def _on_sensitivity_changed(self, scale):
@@ -569,7 +569,7 @@ class ScrollPage(Gtk.ScrolledWindow):
         self._update_sens_label(value)
 
         # Apply to device
-        device_threshold = int((100 - value) * 2.55)
+        device_threshold = max(1, min(254, int((100 - value) * 2.55)))
         self._apply_smartshift_to_device(True, device_threshold)
 
     def _update_sens_label(self, value):
