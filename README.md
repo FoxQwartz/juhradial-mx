@@ -41,7 +41,7 @@
 -->
 
 > [!TIP]
-> **New in [v0.4.4](CHANGELOG.md):** SmartShift and hi-res scroll controls now really program the mouse: the daemon spoke the wrong HID++ dialect to the MX Master 3/3S/4 SmartShift feature, so mode changes silently did nothing ([#106](https://github.com/JuhLabs/juhradial-mx/issues/106), [#107](https://github.com/JuhLabs/juhradial-mx/issues/107)). Plus live wheel/battery readouts in Settings ([#108](https://github.com/JuhLabs/juhradial-mx/issues/108)). [Update now](#installation).
+> **New in [v0.4.4](CHANGELOG.md):** SmartShift and hi-res scroll controls now really program the mouse. The daemon spoke the legacy HID++ dialect to the SmartShift Enhanced feature the MX Master 3/3S/4 actually expose, so reads returned a constant and every mode or threshold change silently did nothing, while hi-res toggles were misrouted into the ratchet control ([#106](https://github.com/JuhLabs/juhradial-mx/issues/106), [#107](https://github.com/JuhLabs/juhradial-mx/issues/107)). With v0.4.4 all three wheel modes (SmartShift, permanent ratchet, free-spin) apply on the hardware and round-trip correctly, per-app profile wheel settings work, the Settings wheel and battery readouts populate on open and follow the device live, and the Devices page reports the real connection (Bolt, Unifying, or Bluetooth) instead of guessing ([#108](https://github.com/JuhLabs/juhradial-mx/issues/108)). Thanks to [@FoxQwartz](https://github.com/FoxQwartz) for the hardware-level reports. [Update now](#installation).
 
 ## Installation
 
